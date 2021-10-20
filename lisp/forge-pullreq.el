@@ -125,8 +125,6 @@
 ;;; Utilities
 
 (defun forge-read-pullreq (prompt &optional type)
-  (when (eq type t)
-    (setq type (if current-prefix-arg nil 'open)))
   (let* ((default (forge-current-pullreq))
          (repo    (forge-get-repository (or default t)))
          (choices (mapcar

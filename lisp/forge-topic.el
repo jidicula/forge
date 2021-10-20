@@ -715,8 +715,6 @@ Return a value between 0 and 1."
 ;;; Completion
 
 (defun forge-read-topic (prompt &optional type allow-number)
-  (when (eq type t)
-    (setq type (if current-prefix-arg nil 'open)))
   (let* ((default (forge-current-topic))
          (repo    (forge-get-repository (or default t)))
          (choices (mapcar

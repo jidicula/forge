@@ -111,8 +111,6 @@
 ;;; Utilities
 
 (defun forge-read-issue (prompt &optional type)
-  (when (eq type t)
-    (setq type (if current-prefix-arg nil 'open)))
   (let* ((default (forge-current-issue))
          (repo    (forge-get-repository (or default t)))
          (choices (mapcar
