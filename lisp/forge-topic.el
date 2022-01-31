@@ -714,20 +714,20 @@ Return a value between 0 and 1."
 
 ;;; Completion
 
-(defun forge-read-topic (prompt &optional type allow-number)
+(defun forge-read-topic (prompt &optional type allow-number color)
   (let* ((default (forge-current-topic))
          (repo    (forge-get-repository (or default t)))
          (choices (mapcar
-                   (apply-partially #'forge--topic-format-choice repo)
+                   (lambda (args) (forge--topic-format-choice repo args color))
                    (cl-sort
                     (nconc
-                     (forge-ls-pullreqs repo type [number title id class])
-                     (forge-ls-issues   repo type [number title id class]))
+                     (forge-ls-pullreqs repo type [number title id class state])
+                     (forge-ls-issues   repo type [number title id class state]))
                     #'> :key #'car)))
          (choice  (magit-completing-read
                    prompt choices nil nil nil nil
                    (and default
-                        (setq default (forge--topic-format-choice default))
+                        (setq default (forge--topic-format-choice default color))
                         (member default choices)
                         (car default)))))
     (or (cdr (assoc choice choices))
@@ -737,19 +737,36 @@ Return a value between 0 and 1."
                    (user-error "Not an existing topic or number: %s")
                  number))))))
 
-(cl-defmethod forge--topic-format-choice ((topic forge-topic))
-  (cons (format "%s%s  %s"
-                (forge--topic-type-prefix topic)
-                (oref topic number)
-                (oref topic title))
-        (oref topic id)))
+(cl-defmethod forge--topic-format-choice ((topic forge-topic) &optional color)
+  (let ((string (format "%s%s  %s"
+                        (forge--topic-type-prefix topic)
+                        (oref topic number)
+                        (oref topic title))))
+    (cons (if color
+              (propertize string 'face
+                          (cl-case (oref topic state)
+                            (merged 'forge-topic-merged)
+                            (closed 'force-topic-closed)
+                            (open   'forge-topic-open)
+                            (t 'warning)))
+            string)
+          (oref topic id))))
 
-(cl-defmethod forge--topic-format-choice ((repo forge-repository) args)
-  (pcase-let ((`(,number ,title ,id ,class) args))
-    (cons (format "%s%s  %s"
-                  (forge--topic-type-prefix repo class)
-                  number
-                  title)
+(cl-defmethod forge--topic-format-choice ((repo forge-repository) args
+                                          &optional color)
+  (pcase-let* ((`(,number ,title ,id ,class ,state) args)
+               (string (format "%s%s  %s"
+                               (forge--topic-type-prefix repo class)
+                               number
+                               title)))
+    (cons (if color
+              (propertize string 'face
+                          (cl-case state
+                            (merged 'forge-topic-merged)
+                            (closed 'force-topic-closed)
+                            (open   'forge-topic-open)
+                            (t 'warning)))
+            string)
           id)))
 
 (defun forge-topic-completion-at-point ()
