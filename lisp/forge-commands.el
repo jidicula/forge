@@ -899,6 +899,7 @@ is added anyway.  Currently this only supports Github and Gitlab."
                  (if forge-display-in-status-buffer
                      "hide all topics"
                    "display topics"))
+  :transient t
   (interactive)
   (setq forge-display-in-status-buffer (not forge-display-in-status-buffer))
   (magit-refresh))
@@ -912,6 +913,7 @@ This only affect the current status buffer."
                      "hide closed topics"
                    "display recently closed topics"))
   :inapt-if-not (lambda () forge-display-in-status-buffer)
+  :transient t
   (interactive)
   (magit-repository-local-delete (list 'forge-ls-recent-topics 'issue))
   (magit-repository-local-delete (list 'forge-ls-recent-topics 'pullreq))
