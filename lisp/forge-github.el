@@ -703,6 +703,16 @@
     `((merge_method . ,(symbol-name method))
       ,@(and hash `((sha . ,hash))))))
 
+(defun forge-set-default-branch (branch)
+  ;;(interactive (list (magit-read-local-branch "Set default branch")))
+  (interactive (list (read-string "Set default branch: ")))
+  (forge--set-default-branch (forge-get-repository t) branch))
+
+(cl-defmethod forge--set-default-branch ((repo forge-github-repository) branch)
+  (forge--ghub-patch repo
+    "/repos/:owner/:repo"
+    `((default_branch . ,branch))))
+
 ;;; Utilities
 
 (cl-defun forge--ghub-get (obj resource
