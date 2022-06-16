@@ -511,11 +511,10 @@
       :errorback (lambda (&rest _) (forge-pull)))))
 
 (cl-defmethod forge--submit-create-pullreq ((_ forge-github-repository) repo)
-  (let-alist (forge--topic-parse-buffer)
-    (when (and .yaml (local-variable-p 'forge--buffer-draft-p))
-      (user-error "Cannot use yaml frontmatter and set `%s' at the same time"
-                  'forge--buffer-draft-p))
-    (pcase-let* ((`(,base-remote . ,base-branch)
+  ;; https://docs.github.com/en/rest/pulls/pulls#create-a-pull-request
+  (forge--ghub-post repo "/repos/:owner/:repo/pulls"
+    (pcase-let* ((`(,title . ,body))
+                 (`(,base-remote . ,base-branch)
                   (magit-split-branch-name forge--buffer-base-branch))
                  (`(,head-remote . ,head-branch)
                   (magit-split-branch-name forge--buffer-head-branch))
@@ -523,30 +522,43 @@
                  (url-mime-accept-string
                   ;; Support draft pull-requests.
                   "application/vnd.github.shadow-cat-preview+json"))
-      (forge--ghub-post repo "/repos/:owner/:repo/pulls"
-        `((title . , .title)
-          (body  . , .body)
-          (base  . ,base-branch)
-          (head  . ,(if (equal head-remote base-remote)
-                        head-branch
-                      (concat (oref head-repo owner) ":"
-                              head-branch)))
-          (draft . ,(if (local-variable-p 'forge--buffer-draft-p)
-                        forge--buffer-draft-p
-                      .draft))
-          (maintainer_can_modify . t))
-        :callback  (forge--post-submit-callback)
-        :errorback (forge--post-submit-errorback)))))
+      `((title . ,title)
+        (body  . ,(if (or forge--buffer-assignees forge--buffer-labels)
+                      (concat
+                       "---\n"
+                       (and forge--buffer-assignees
+                            (format "assignees: [%s]"
+                                    (mapconcat #'identity
+                                               forge--buffer-assignees
+                                               ", ")))
+                       (and forge--buffer-labels
+                            (format "labels: [%s]"
+                                    (mapconcat #'identity
+                                               forge--buffer-labels
+                                               ", ")))
+                       "---\n\n"
+                       body)
+                    body))
+        (base  . ,base-branch)
+        (head  . ,(if (equal head-remote base-remote)
+                      head-branch
+                    (concat (oref head-repo owner) ":" head-branch)))
+        (draft . ,forge--buffer-draft-p)
+        (maintainer_can_modify . t)))
+    :callback  (forge--post-submit-callback)
+    :errorback (forge--post-submit-errorback)))
 
 (cl-defmethod forge--submit-create-issue ((_ forge-github-repository) repo)
-  (let-alist (forge--topic-parse-buffer)
-    (forge--ghub-post repo "/repos/:owner/:repo/issues"
-      `((title . , .title)
-        (body  . , .body)
-        ,@(and .labels    (list (cons 'labels    .labels)))
-        ,@(and .assignees (list (cons 'assignees .assignees))))
-      :callback  (forge--post-submit-callback)
-      :errorback (forge--post-submit-errorback))))
+  ;; https://docs.github.com/en/rest/issues/issues#create-an-issue
+  (forge--ghub-post repo "/repos/:owner/:repo/issues"
+    (pcase-let ((`(,title . ,body)))
+      `((title     . ,title)
+        (body      . ,body)
+        (assignees . ,forge--buffer-assignees)
+        (labels    . ,forge--buffer-labels)
+        (milestone . ,forge--buffer-milestone)))
+    :callback  (forge--post-submit-callback)
+    :errorback (forge--post-submit-errorback)))
 
 (cl-defmethod forge--submit-create-post ((_ forge-github-repository) topic)
   (forge--ghub-post topic "/repos/:owner/:repo/issues/:number/comments"
@@ -561,9 +573,9 @@
       (forge-issue   "/repos/:owner/:repo/issues/:number")
       (forge-post    "/repos/:owner/:repo/issues/comments/:number"))
     (if (cl-typep post 'forge-topic)
-        (let-alist (forge--topic-parse-buffer)
-          `((title . , .title)
-            (body  . , .body)))
+        (pcase-let ((`(,title . ,body)))
+          `((title . ,title)
+            (body  . ,body)))
       `((body . ,(string-trim (buffer-string)))))
     :callback  (forge--post-submit-callback)
     :errorback (forge--post-submit-errorback)))
@@ -655,8 +667,8 @@
   (closql-delete post)
   (magit-refresh))
 
-(cl-defmethod forge--topic-templates ((repo forge-github-repository)
-                                      (_ (subclass forge-issue)))
+(cl-defmethod forge--topic-template-files ((repo forge-github-repository)
+                                           (_ (subclass forge-issue)))
   (and-let* ((files (magit-revision-files (oref repo default-branch))))
     (let ((case-fold-search t))
       (if-let ((file (--first (string-match-p "\
@@ -674,8 +686,8 @@
                    (list conf))
           files)))))
 
-(cl-defmethod forge--topic-templates ((repo forge-github-repository)
-                                      (_ (subclass forge-pullreq)))
+(cl-defmethod forge--topic-template-files ((repo forge-github-repository)
+                                           (_ (subclass forge-pullreq)))
   (and-let* ((files (magit-revision-files (oref repo default-branch))))
     (let ((case-fold-search t))
       (if-let ((file (--first (string-match-p "\

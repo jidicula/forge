@@ -435,34 +435,41 @@
 ;;; Mutations
 
 (cl-defmethod forge--submit-create-pullreq ((_ forge-gitlab-repository) base-repo)
-  (let-alist (forge--topic-parse-buffer)
-    (pcase-let* ((`(,base-remote . ,base-branch)
-                  (magit-split-branch-name forge--buffer-base-branch))
-                 (`(,head-remote . ,head-branch)
-                  (magit-split-branch-name forge--buffer-head-branch))
-                 (head-repo (forge-get-repository 'stub head-remote)))
-      (forge--glab-post head-repo "/projects/:project/merge_requests"
-        `((title . ,(if (if (local-variable-p 'forge--buffer-draft-p)
-                            forge--buffer-draft-p
-                          .draft)
-                        (concat "Draft: " .title)
-                      .title))
-          (description . , .body)
-          ,@(and (not (equal head-remote base-remote))
-                 `((target_project_id . ,(oref base-repo forge-id))))
+  ;; https://docs.gitlab.com/ee/api/merge_requests.html#create-mr
+  (pcase-let* ((`(,_base-remote . ,base-branch)
+                (magit-split-branch-name forge--buffer-base-branch))
+               (`(,head-remote . ,head-branch)
+                (magit-split-branch-name forge--buffer-head-branch))
+               (head-repo (forge-get-repository 'stub head-remote)))
+    (forge--glab-post head-repo "/projects/:project/merge_requests"
+      (pcase-let ((`(,title . ,body)))
+        `((title . ,(if forge--buffer-draft-p
+                        (concat "Draft: " title)
+                      title))
+          (description . ,body)
+          ;; ,@(and (not (equal head-remote base-remote))
+          (target_project_id . ,(oref base-repo forge-id))
           (target_branch . ,base-branch)
           (source_branch . ,head-branch)
-          (allow_collaboration . t))
-        :callback  (forge--post-submit-callback)
-        :errorback (forge--post-submit-errorback)))))
-
-(cl-defmethod forge--submit-create-issue ((_ forge-gitlab-repository) repo)
-  (let-alist (forge--topic-parse-buffer)
-    (forge--glab-post repo "/projects/:project/issues"
-      `((title       . , .title)
-        (description . , .body))
+          (assignees_ids . ,forge--buffer-assignees)
+          (labels        . ,forge--buffer-labels)
+          (milestone_id  . ,forge--buffer-milestone)
+          (reviewer_ids  . ,forge--buffer-reviewers)
+          (allow_collaboration . t)))
       :callback  (forge--post-submit-callback)
       :errorback (forge--post-submit-errorback))))
+
+(cl-defmethod forge--submit-create-issue ((_ forge-gitlab-repository) repo)
+  ;; https://docs.gitlab.com/ee/api/issues.html#new-issue
+  (forge--glab-post repo "/projects/:project/issues"
+    (pcase-let ((`(,title . ,body)))
+      `((title        . ,title)
+        (description  . ,body)
+        (assignee_id  . ,(car forge--buffer-assignees))
+        (labels       . ,forge--buffer-labels)
+        (milestone_id . ,forge--buffer-milestone)))
+    :callback  (forge--post-submit-callback)
+    :errorback (forge--post-submit-errorback)))
 
 (cl-defmethod forge--submit-create-post ((_ forge-gitlab-repository) topic)
   (forge--glab-post topic
@@ -476,26 +483,26 @@
 (cl-defmethod forge--submit-edit-post ((_ forge-gitlab-repository) post)
   (forge--glab-put post
     (cl-etypecase post
-      (forge-pullreq "/projects/:project/merge_requests/:number")
-      (forge-issue   "/projects/:project/issues/:number")
-      (forge-issue-post "/projects/:project/issues/:topic/notes/:number")
+      (forge-pullreq      "/projects/:project/merge_requests/:number")
+      (forge-issue        "/projects/:project/issues/:number")
+      (forge-issue-post   "/projects/:project/issues/:topic/notes/:number")
       (forge-pullreq-post "/projects/:project/merge_requests/:topic/notes/:number"))
     (if (cl-typep post 'forge-topic)
-        (let-alist (forge--topic-parse-buffer)
-          ;; Keep Gitlab from claiming that the user
-          ;; changed the description when that isn't
-          ;; true.  The same isn't necessary for the
-          ;; title; in that case Gitlab performs the
-          ;; necessary check itself.
-          `((title . , .title)
-            ,@(and (not (equal .body (oref post body)))
-                   `((description . , .body)))))
+        (pcase-let ((`(,title . ,body)))
+          `((title . ,title)
+            ;; Keep Gitlab from claiming that the user changed
+            ;; the description when that isn't true.  The same
+            ;; isn't necessary for the title; for that, Gitlab
+            ;; performs the necessary check itself.
+            ,@(and (not (equal body (oref post body)))
+                   `((description . ,body)))))
       `((body . ,(string-trim (buffer-string)))))
     :callback  (forge--post-submit-callback)
     :errorback (forge--post-submit-errorback)))
 
 (cl-defmethod forge--set-topic-field
   ((_repo forge-gitlab-repository) topic field value)
+  ;; https://docs.gitlab.com/ee/api/merge_requests.html#update-mr
   (forge--glab-put topic
     (cl-typecase topic
       (forge-pullreq "/projects/:project/merge_requests/:number")
@@ -572,13 +579,13 @@
   (closql-delete post)
   (magit-refresh))
 
-(cl-defmethod forge--topic-templates ((repo forge-gitlab-repository)
-                                      (_ (subclass forge-issue)))
+(cl-defmethod forge--topic-template-files ((repo forge-gitlab-repository)
+                                           (_ (subclass forge-issue)))
   (--filter (string-match-p "\\`\\.gitlab/issue_templates/.+\\.md\\'" it)
             (magit-revision-files (oref repo default-branch))))
 
-(cl-defmethod forge--topic-templates ((repo forge-gitlab-repository)
-                                      (_ (subclass forge-pullreq)))
+(cl-defmethod forge--topic-template-files ((repo forge-gitlab-repository)
+                                           (_ (subclass forge-pullreq)))
   (--filter (string-match-p "\\`\\.gitlab/merge_request_templates/.+\\.md\\'" it)
             (magit-revision-files (oref repo default-branch))))
 

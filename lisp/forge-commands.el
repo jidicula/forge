@@ -573,19 +573,22 @@ TOPIC and modify that instead."
 If there is no current topic or with a prefix argument read a
 TOPIC and modify that instead."
   (interactive (list (forge-read-topic "Edit assignees of")))
-  (let* ((topic (forge-get-topic topic))
-         (repo  (forge-get-repository topic))
-         (value (closql--iref topic 'assignees))
+  (let ((topic (forge-get-topic topic)))
+    (forge--set-topic-assignees (forge-get-repository topic)
+                                topic
+                                (forge-read-topic-assignees topic))))
+
+(defun forge-read-topic-assignees (&optional topic)
+  (let* ((repo (forge-get-repository (or topic t)))
+         (value (and topic (closql--iref topic 'assignees)))
          (choices (mapcar #'cadr (oref repo assignees)))
          (crm-separator ","))
-    (forge--set-topic-assignees
-     repo topic
-     (magit-completing-read-multiple*
-      "Assignees: " choices nil
-      (if (forge--childp repo 'forge-gitlab-repository)
-          t ; Selecting something else would fail later on.
-        'confirm)
-      (mapconcat #'car value ",")))))
+    (magit-completing-read-multiple*
+     "Assignees: " choices nil
+     (if (forge--childp repo 'forge-gitlab-repository)
+         t ; Selecting something else would fail later on.
+       'confirm)
+     (mapconcat #'car value ","))))
 
 (defun forge-edit-topic-review-requests (pullreq)
   "Edit the review-requests of the current pull-request.

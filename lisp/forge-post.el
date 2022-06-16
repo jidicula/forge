@@ -120,6 +120,19 @@
     (define-key map [remap evil-quit]                    #'forge-post-cancel)
     map))
 
+(transient-define-prefix forge-post-dispatch ()
+  "Dispatch a post creation command."
+  ["Settings"
+   :if (lambda () (string-prefix-p "new-" (file-name-nondirectory buffer-file-name)))
+   ("d" "Set draft"     forge-topic-set-draft)
+   ("a" "Set assignees" forge-topic-set-assignees)
+   ("l" "Set labels"    forge-topic-set-labels)
+   ("m" "Set milestone" forge-topic-set-milestone)
+   ("r" "Set reviewers" forge-topic-set-reviewers)]
+  ["Act"
+   ("C-c" "Submit" forge-post-submit)
+   ("C-k" "Cancel" forge-post-cancel)])
+
 (define-derived-mode forge-post-mode gfm-mode "Forge-Post" "")
 
 (defvar-local forge--buffer-base-branch nil)
@@ -129,7 +142,6 @@
 (defvar-local forge--submit-post-function nil)
 (defvar-local forge--cancel-post-function nil)
 (defvar-local forge--pre-post-buffer nil)
-(defvar-local forge--buffer-draft-p nil)
 
 (defun forge--prepare-post-buffer (filename &optional header source target)
   (let ((file (magit-git-dir
@@ -163,28 +175,18 @@
               (setq buf nil)
               (message "Using browser to visit %s instead of opening an issue"
                        .url))
-             (.name
-              ;; A Github issue with yaml frontmatter.
-              (save-excursion (insert .text))
-              (unless (re-search-forward "^title: " nil t)
-                (when (re-search-forward "^---" nil t 2)
-                  (beginning-of-line)
-                  (insert "title: \n")
-                  (backward-char))))
              (t
-              (insert "# ")
-              (let ((single
-                     (and source
-                          (= (car (magit-rev-diff-count source target)) 1))))
-                (save-excursion
-                  (when single
-                    ;; A pull-request.
-                    (magit-rev-insert-format "%B" source))
-                  (when .text
-                    (if single
-                        (insert "-------\n")
-                      (insert "\n"))
-                    (insert "\n" .text)))))))))
+              (cond
+               ((and source
+                     (length= (car (magit-rev-diff-count source target)) 1))
+                (magit-rev-insert-format "%B" source)
+                (when .text
+                  (insert "\n------\n\n" .text)))
+               (.text (insert .text)))
+              (when .draft     (setq forge--buffer-draft-p   .draft))
+              (when .labels    (setq forge--buffer-labels    .labels))
+              (when .assignees (setq forge--buffer-assignees .assigness))
+              )))))
       buf)))
 
 (defun forge--display-post-buffer (buf)
@@ -237,21 +239,6 @@
 (defun forge--post-submit-errorback ()
   (lambda (error &rest _)
     (error "Failed to submit post: %S" error)))
-
-(transient-define-prefix forge-post-dispatch ()
-  "Dispatch a post creation command."
-  ["Variables"
-   ("d" "Create draft" forge-post-toggle-draft)]
-  ["Act"
-   ("C-c" "Submit" forge-post-submit)
-   ("C-k" "Cancel" forge-post-cancel)])
-
-(transient-define-infix forge-post-toggle-draft ()
-  "Toggle whether the pull-request being created is a draft."
-  :class 'transient-lisp-variable
-  :variable 'forge--buffer-draft-p
-  :reader (lambda (&rest _) (not forge--buffer-draft-p))
-  :if (lambda () (equal (file-name-nondirectory buffer-file-name) "new-pullreq")))
 
 ;;; Notes
 

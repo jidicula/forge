@@ -712,6 +712,44 @@ Return a value between 0 and 1."
       (funcall forge-format-avatar-function author)
     ""))
 
+;;; Commands
+
+(defvar-local forge--buffer-assignees nil)
+(defvar-local forge--buffer-draft-p nil)
+(defvar-local forge--buffer-labels nil)
+(defvar-local forge--buffer-milestone nil)
+(defvar-local forge--buffer-reviewers nil)
+
+(transient-define-infix forge-post-set-assignees ()
+  "Set assignees for the pull-request being created."
+  :class 'transient-lisp-variable
+  :variable 'forge--buffer-assignees
+  :reader (lambda (&rest _) (forge-read-topic-assignees)))
+
+(transient-define-infix forge-post-set-draft ()
+  "Toggle whether the pull-request being created is a draft."
+  :class 'transient-lisp-variable
+  :variable 'forge--buffer-draft-p
+  :reader (lambda (&rest _) (not forge--buffer-draft-p))
+  :if (lambda () (equal (file-name-nondirectory buffer-file-name) "new-pullreq")))
+
+(transient-define-infix forge-post-set-labels ()
+  "Set assignees for the pull-request being created."
+  :class 'transient-lisp-variable
+  )
+
+(transient-define-infix forge-post-set-milestones ()
+  "Set assignees for the pull-request being created."
+  :class 'transient-lisp-variable
+  )
+
+(transient-define-infix forge-post-set-reviewers ()
+  "Set reviewers for the pull-request being created."
+  :class 'transient-lisp-variable
+  :variable 'forge--buffer-reviewers
+  ;; :reader (lambda (&rest _) (forge-read-topic-reviewers))
+  :if (lambda () (equal (file-name-nondirectory buffer-file-name) "new-pullreq")))
+
 ;;; Completion
 
 (defun forge-read-topic (prompt &optional type allow-number)
@@ -790,124 +828,78 @@ Return a value between 0 and 1."
                                     (oref repo id))))
                :annotation-function (lambda (c) (get-text-property 0 :title c))))))
 
-;;; Parse
-
-(defun forge--topic-parse-buffer (&optional file)
-  (save-match-data
-    (save-excursion
-      (goto-char (point-min))
-      (let ((alist (save-excursion (forge--topic-parse-yaml))))
-        (if alist
-            (setf (alist-get 'yaml alist) t)
-          (setq alist (save-excursion (forge--topic-parse-plain))))
-        (setf (alist-get 'file alist) file)
-        (setf (alist-get 'text alist) (magit--buffer-string nil nil ?\n))
-        (when (and file (not (alist-get 'prompt alist)))
-          (setf (alist-get 'prompt alist)
-                (file-name-sans-extension (file-name-nondirectory file))))
-        ;; If there is a yaml front-matter, then it is supposed
-        ;; to have a `title' field, but this may not be the case.
-        (when (and (not file)
-                   (not (alist-get 'title alist)))
-          (setf (alist-get 'title alist)
-                (read-string "Title: ")))
-        alist))))
-
-(defun forge--topic-parse-yaml ()
-  (let (alist beg end)
-    (when (looking-at "^---[\s\t]*$")
-      (forward-line)
-      (setq beg (point))
-      (when (re-search-forward "^---[\s\t]*$" nil t)
-        (setq end (match-beginning 0))
-        (setq alist (yaml-parse-string
-                     (buffer-substring-no-properties beg end)
-                     :object-type 'alist
-                     :sequence-type 'list
-                     ;; FIXME Does not work because of
-                     ;; https://github.com/zkry/yaml.el/pull/28.
-                     :false-object nil))
-        (let-alist alist
-          (when (and .name .about)
-            (setf (alist-get 'prompt alist)
-                  (format "[%s] %s" .name .about)))
-          (when (and .labels (atom .labels))
-            (setf (alist-get 'labels alist) (list .labels)))
-          (when (and .assignees (atom .assignees))
-            (setf (alist-get 'assignees alist) (list .assignees))))
-        (forward-line)
-        (when (and (not (alist-get 'title alist))
-                   (looking-at "^\n?#*"))
-          (goto-char (match-end 0))
-          (setf (alist-get 'title alist)
-                (string-trim
-                 (magit--buffer-string (point) (line-end-position) t)))
-          (forward-line))
-        (setf (alist-get 'body alist)
-              (string-trim (magit--buffer-string (point) nil ?\n)))))
-    alist))
-
-(defun forge--topic-parse-plain ()
-  (let (title body)
-    (when (looking-at "\\`#*")
-      (goto-char (match-end 0)))
-    (setq title (magit--buffer-string (point) (line-end-position) t))
-    (forward-line)
-    (setq body (magit--buffer-string (point) nil ?\n))
-    `((title . ,(string-trim title))
-      (body  . ,(string-trim body)))))
-
-(defun forge--topic-parse-link-buffer ()
-  (save-match-data
-    (save-excursion
-      (goto-char (point-min))
-      (mapcar (lambda (alist)
-                (cons (cons 'prompt (concat (alist-get 'name alist) " -- "
-                                            (alist-get 'about alist)))
-                      alist))
-              (forge--topic-parse-yaml-links)))))
-
-(defun forge--topic-parse-yaml-links ()
-  (alist-get 'contact_links
-             (yaml-parse-string (buffer-substring-no-properties
-                                 (point-min)
-                                 (point-max))
-                                :object-type 'alist
-                                :sequence-type 'list)))
-
 ;;; Templates
 
-(cl-defgeneric forge--topic-templates (repo class)
-  "Return a list of topic template files for REPO and a topic of CLASS.")
+(defun forge--topic-template (repo class)
+  (let ((templates (forge--topic-templates repo class)))
+    (if (cdr templates)
+        (let ((choice (magit-completing-read
+                       (pcase class
+                         ('forge-issue "Select issue template")
+                         ('forge-pullreq "Select pull-request template"))
+                       (mapcar (lambda (template) (alist-get 'prompt template))
+                               templates)
+                       nil t)))
+          (cl-find-if (lambda (template)
+                        (equal (alist-get 'prompt template) choice))
+                      templates))
+      (car templates))))
 
-(cl-defgeneric forge--topic-template (repo class)
-  "Return a topic template alist for REPO and a topic of CLASS.
-If there are multiple templates, then the user is asked to select
-one of them.  It there are no templates, then return a very basic
-alist, containing just `text' and `position'.")
-
-(defun forge--topic-templates-data (repo class)
+(defun forge--topic-templates (repo class)
   (let ((branch (oref repo default-branch)))
-    (mapcan (lambda (f)
+    (mapcan (lambda (file)
               (with-temp-buffer
-                (magit-git-insert "cat-file" "-p" (concat branch ":" f))
-                (if (equal (file-name-nondirectory f) "config.yml")
-                    (forge--topic-parse-link-buffer)
-                  (list (forge--topic-parse-buffer f)))))
-            (forge--topic-templates repo class))))
+                (save-excursion
+                  (magit-git-insert "cat-file" "-p" (concat branch ":" file)))
+                (if (equal (file-name-nondirectory file) "config.yml")
+                    (forge--topic-parse-template-config)
+                  (list (forge--topic-parse-template
+                         (file-name-sans-extension
+                          (file-name-nondirectory file)))))))
+            (forge--topic-template-files repo class))))
 
-(cl-defmethod forge--topic-template ((repo forge-repository)
-                                     (class (subclass forge-topic)))
-  (let ((choices (forge--topic-templates-data repo class)))
-    (if (cdr choices)
-        (let ((c (magit-completing-read
-                  (if (eq class 'forge-pullreq)
-                      "Select pull-request template"
-                    "Select issue template")
-                  (--map (alist-get 'prompt it) choices)
-                  nil t)))
-          (--first (equal (alist-get 'prompt it) c) choices))
-      (car choices))))
+(cl-defgeneric forge--topic-template-files (repo class))
+
+(defun forge--topic-parse-template-config ()
+  (mapcar (lambda (template)
+            (cons (cons 'prompt (concat (alist-get 'name template) " -- "
+                                        (alist-get 'about template)))
+                  template))
+          (alist-get 'contact_links
+                     (yaml-parse-string (magit--buffer-string)
+                                        :object-type 'alist
+                                        :sequence-type 'list))))
+
+(defun forge--topic-parse-template (name)
+  (skip-chars-forward "\s\t\n\r")
+  (let (template)
+    (when (looking-at "^---[\s\t]*$")
+      (forward-line)
+      (let ((beg (point)))
+        (if (not (re-search-forward "^---[\s\t]*$" nil t))
+            (forward-line -1)
+          (setq template (yaml-parse-string
+                          (magit--buffer-string beg (match-beginning 0))
+                          :object-type 'alist
+                          :sequence-type 'list
+                          :null-object nil))
+          (delete-region (point-min) (point))
+          (let-alist template
+            (when .title
+              (insert (format "# %s\n\n" (string-trim .title))))
+            (setf (compat-alist-get 'title template nil t) nil)
+            (when (and .name .about)
+              (setf (alist-get 'prompt template)
+                    (format "%s -- %s" .name .about)))
+            (when (and .labels (atom .labels))
+              (setf (alist-get 'labels template) (list .labels)))
+            (when (and .assignees (atom .assignees))
+              (setf (alist-get 'assignees template) (list .assignees)))))))
+    (unless (alist-get 'prompt template)
+      (setf (alist-get 'prompt template) name))
+    (setf (alist-get 'text template)
+          (magit--buffer-string (point) nil ?\n))
+    template))
 
 ;;; Bug-Reference
 
